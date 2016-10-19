@@ -130,7 +130,17 @@ Azkaban Web Server 负责工程管理，认证，任务调度和运行的触发�
 
 #### 为 SSL 获取 KeyStore
 
-todo
+Azkaban 使用 SSL 套接字连接，要求必须有一个可用的密钥库。你可以按照[此链接](http://docs.codehaus.org/display/JETTY/How+to+configure+SSL中的步骤来创建一个。
+
+密钥库建好之后，Azkaban 中必须配置密钥库的路径和密码。在 **azkaban.properties** 文件中覆盖一下属性：
+
+```properties
+jetty.keystore=keystore
+jetty.password=password
+jetty.keypassword=password
+jetty.truststore=keystore
+jetty.trustpassword=password
+```
 
 #### 设置DB
 
@@ -267,32 +277,138 @@ Azkaban 的非核心功能设计为基于插件的方式来实现，则：
 1. 插件可以在不同的环境中选择性地被安装、升级，而无须改动 Azkaban 的核心部分，并且
 2. 插件式的设计使 Azkaban 非常易于扩展以适配其他系统
 
-现在，Azkaban 有很多不同的插件。在 web 服务端，有：
+现在，Azkaban 有很多不同的插件。在 web 服务器端，
 
-- 浏览插件：
-- 触发器插件：
-- 用户管理插件：
-- 告警插件：
+- 浏览插件：可以自定义页面来为azkaban增加新特性。已知的实现包括” HDFS 文件系统查看“和”报告“
+- 触发器插件：可以自定义触发方法
+- 用户管理插件：可以自定义用户认证方式；比如，在 LinkedIn 我们有基于 LDAP 的用户认证
+- 告警插件：除了基于邮件的告警之外，还可以使用其他不同的告警方式
 - AzkabanExecutorServer 插件化的任务类型
+
+在执行服务器端，
+
+- 可插拔的不同任务类型的执行器，比如为 hadoop 生态系统中各组件提供的任务类型（job types）
+
+为了更好地使用 Azkaban，我们建议安装这些插件。已经有一些可用的通用型的插件，可以在[下载页面](http://azkaban.github.io/downloads.html)中获取。除此之外，你还可以从 [Github 仓库](https://github.com/azkaban/azkaban-plugins) 拷贝源码，然后在不同的插件目录下运行 **ant** 命令来创建压缩包。
+
+下面介绍下如何在 Azkaban 中安装以及使用这些插件。
 
 ### 用户管理插件
 
+Azkaban 默认使用使用 XMLUserManager 类，该类基于一个 xml 文件（位于 **conf/azkaban-users.xml**）来实现用户认证。
 
+这种方式不安全且无法支持很多用户。在实际的生产环境中，你需要依靠自己提供的用户管理 class 来满足需求，比如一个基于 LDAP 的实现方式。 **XMLUserManager** 仍可以用于一些特殊的用户账号和权限管理。你能在默认的 **azkaban-users.xml** 文件中找到两个这种场景的例子。
+
+要使用你自己的用户管理类，可在 **Azkaban2-web-server-install-dir/conf/azkaban.properties** 中定义：
+
+```properties
+user.manager.class=MyUserManagerClass
+```
+
+并将对于的 jar 包放到 **plugins** 目录下。
 
 ### 浏览插件
 
-#### HDFS浏览插件
+#### HDFS 浏览插件
 
+HDFS 浏览插件需要安装在 AzkabanWebServer 的插件目录，并在 AzkabanWebServer 的配置文件中定义
 
+如，在 **Azkaban2-web-server-install-dir/conf/azkaban.properties** 中：
+
+```properties
+viewer.plugins=hdfs
+```
+
+会告诉 Azkaban 从  **Azkaban2-web-server-install-dir/plugins/viewer/hdfs** 目录下加载 hdfs 浏览插件。
+
+将 **azkaban-hdfs-viewer** 解压到 AzkabanWebServer 的 **./plugins/viewer** 下，重命名目录为上面所定义的 **hdfs**。
+
+根据 hadoop 的安装方式：
+
+1. 若 Hadoop 安装时未开启安全保护，使用默认配置即可，重启 **AzkabanWebServer** 后可使用 HDFS 查看器。
+
+2. 若 Hadoop 安装时启用了安全保护，以下配置参数不能使用默认值，在插件的配置文件中：
+
+   | 参数                            | 说明                                       |
+   | ----------------------------- | ---------------------------------------- |
+   | azkaban.should.proxy          | Azkaban 是否代理为另一个用户来查看 hdfs 文件系统，<br/> 而不是 Azkaban 用户，默认为 **true** |
+   | hadoop.security.manager.class | 使用的安装管理类，用来与安全认证的 hadoop 集群进行交互，<br/>默认为**azkaban.security.HadoopSecurityManager_H\_1\_0 **（用于 hadoop 1.x） |
+   | proxy.user                    | Azkaban 与 kerberos[^20] 和 hadoop 的用户配置，类似于 oozie[^21] 配置，<br/>用于启用了安全设置的 hadoop |
+   | proxy.keytab.location         | keytab[^22] 文件的位置，Azkaban 可以为特定的 **proxy.user** 使用 Kerberos 作认证 |
+
+   要了解更多关于 Hadoop 安全性相关的信息，参考[HadoopSecurityManager](http://azkaban.github.io/azkaban/docs/latest/#hadoopsecuritymanager)
 
 ### 任务类型插件
 
+Azkaban 有数量有限的内置的任务类型，来运行本地的 unix 命令和简单的 java 程序。大部分情况下，你会想要安装其他额外的任务类型插件，比如：hadoopJava，Pig，Hive，VoldemortBuildAndPush等等。一些常见的类型已经包含在 azkaban-jobtyp 压缩包种了，以下是如何安装：
 
+任务类型插件需要安装在 AzkabanExecutorServer 的插件目录，并在 AzkabanExecutorServer 的配置文件中进行定义，如，在 **Azkaban2-web-server-install-dir/conf/azkaban.properties** 中配置：
 
-### 属性重载
+```properties
+azkaban.jobtype.plugin.dir=plugins/jobtypes
+```
 
+以上配置告诉 Azkaban 从  **Azkaban2-exec-server-install-dir/plugins/jobtypes** 目录加载所有的任务类型。
 
+解压插件包到 AzkabanWebServer 的 **./plugins/** 目录下，重命名目录为上面所定义的 **jobtypes**。
+
+以下是运行 Hadoop 任务的常用配置：
+
+| 参数                       | 说明                                       |
+| ------------------------ | ---------------------------------------- |
+| hadoop.home              | **$HADOOP_HOME** 环境变量设置                  |
+| jobtype.global.classpaht | 集群定义的 hadoop 资源文件，诸如 hadoop-core.jar 和 hadoop 配置文件等（ **${hadoop.home}/hadoop-core-1.0.4.jar，${hadoop.home}/conf** ） |
+
+根据 hadoop 的安装方式：
+
+1. 若 Hadoop 的安装未开启安全认证，使用默认配置即可
+
+2. 若 Hadoop 的安装启用了 kerboeros 认证，需要进行如下设置：
+
+   | 参数                            | 说明                                       |
+   | ----------------------------- | ---------------------------------------- |
+   | hadoop.security.manager.class | 使用的安装管理类，用来与安全认证的 hadoop 集群进行交互，<br/>默认为**azkaban.security.HadoopSecurityManager_H\_1\_0 **（用于 hadoop 1.x） |
+   | proxy.user                    | Azkaban 与 kerberos[^20] 和 hadoop 的用户配置，类似于 oozie[^21] 配置，<br/>用于启用了安全设置的 hadoop |
+   | proxy.keytab.location         | keytab[^22] 文件的位置，Azkaban 可以为特定的 **proxy.user** 使用 Kerberos 作认证 |
+
+   要了解更多关于 Hadoop 安全的相关信息，参考 HadoopSecurityManager
+
+   最后，启动执行器，观察是否有报错信息，并检查执行器服务器的日志。对于任务类型的插件，执行器会执行一个小测试以便让你知道其是否安装正确。
+
+### 属性（Property）重载
+
+Azkaban 的任务由一系列我们称之为属性（property）的键值对的集合来定义。最终的任务执行中包含哪些属性，是由多个来源所决定的。下表类列出了所有的属性来源以及他们的优先级。需要注意，如果一个属性在多个来源中的都有定义，则从优先级高的来源中取值。
+
+以下属性是用户可见的。一些重复的属性合并组成  **AbstractProcessJob.java** 中的 **jobProps** 
+
+| 属性来源                                     | 描述                                       | 优先级   |
+| ---------------------------------------- | ---------------------------------------- | ----- |
+| conf 目录下的 global.properties              | Azkaban 安装时设置的管理属性。所有任务类型的全局属性。          | 最低（0） |
+| jobtype 目录下的 common.properties           | Azkaban 安装时设置的管理属性。所有任务类型的全局属性。          | 1     |
+| jobtype/{jobtype-name} 目录下的 plugin.properties | Azkaban 安装时设置的管理属性。对某个特定的任务类型有效          | 2     |
+| 工程 zip 包中的 common.properties             | 用户定义的属性，对位于同级或子级目录中的所有任务有效               | 3     |
+| 触发流执行时定义的流属性                             | 用户定义的属性，可以在用户界面或 Ajax 接口调用时定义，但不会保存到项目 zip 包中 | 4     |
+| 任务描述文件 {job-name}.job                    | 在实际的任务文件中，用户定义的属性                        | 最高（5） |
+
+以下属性用户不可见，根据不同的任务类型实现，这些属性用于限制用户的任务和属性。一些重复的属性合并组成  **AbstractProcessJob.java** 中的 **sysProps**
+
+| 属性来源                                     | 描述                                       | 优先级   |
+| ---------------------------------------- | ---------------------------------------- | ----- |
+| jobtype 目录下的 commonprivate.properties    | Azkaban 安装时设置的管理属性。所有任务类型的全局属性。所有任务类型使用的全局属性 | 最低（0） |
+| jobtype/{jobtype-name} 目录下的 private.properties | Azkaban 安装时设置的管理属性。所有任务类型的全局属性。对某个特定的任务类型有效 | 最高（1） |
+
+**azkaban.properties** 中定义的是另外一类仅用于控制 Azkaban web服务器和执行服务器配置的属性。需要注意的是， **jobPros**，**sysProps** 和 **azkaban.properties** 是三种不同类型的属性，通常不会被合并（根据不同的任务类型的实现）。
 
 ## 从2.1版本升级DB
 
+todo
+
 ## 从2.7.0版本升级DB
+
+todo
+
+## 附录
+
+[^20]: Kerberos：一种计算机网络授权协议，其设计目标是通过密钥系统，为C/S 模式的应用程序提供高强度的认证服务
+[^21]: oozie：一款 Hadoop 任务调度的开源工作流引擎，由 Cloudera 公司贡献给 Apache 
+[^22]: keytab：Kerberos 使用的包含了加密 key 的
